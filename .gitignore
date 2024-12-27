@@ -24,3 +24,5 @@ caliscope/_version.py
 caliscope.code-workspace
 site/*
 _version.py
+
+tasks/
