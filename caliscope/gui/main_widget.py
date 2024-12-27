@@ -3,9 +3,10 @@ import subprocess
 import sys
 from enum import Enum
 from pathlib import Path
+import signal
 
 import rtoml
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QIcon
 from PySide6.QtWidgets import (
     QApplication,
@@ -239,17 +240,55 @@ class MainWindow(QMainWindow):
         with open(__settings_path__, "w") as f:
             rtoml.dump(self.app_settings, f)
 
+    # Add to MainWindow class
+    def cleanup(self):
+        """Clean up resources before closing"""
+        # Add specific cleanup code here
+        try:
+            # Close any open camera connections
+            if hasattr(self, "camera_array"):
+                self.camera_array.release_all()
+
+            # Close any open windows
+            for window in QApplication.topLevelWindows():
+                window.close()
+
+        except Exception as e:
+            print(f"Error during cleanup: {e}")
+
 
 def launch_main():
-    # import qdarktheme
-
     app = QApplication(sys.argv)
-    dummy_widget = CaptureVolumeVisualizer(camera_array=CameraArray({}))  #  try to force "blinking to initial main"
-    del dummy_widget
-    # qdarktheme.setup_theme("auto")
-    window = MainWindow()
-    window.show()
-    app.exec()
+
+    # Handle Ctrl+C gracefully
+    def signal_handler(signum, frame):
+        app.quit()
+
+    signal.signal(signal.SIGINT, signal_handler)
+
+    # Create timer to allow for keyboard interrupt
+    timer = QTimer()
+    timer.timeout.connect(lambda: None)
+    timer.start(100)
+
+    try:
+        # Initialize main window
+        dummy_widget = CaptureVolumeVisualizer(camera_array=CameraArray({}))
+        del dummy_widget
+
+        window = MainWindow()
+        window.show()
+
+        # Ensure cleanup on window close
+        app.aboutToQuit.connect(window.cleanup)
+
+        return app.exec()
+    except Exception as e:
+        print(f"Error during application execution: {e}")
+        return 1
+    finally:
+        # Cleanup resources
+        app.quit()
 
 
 if __name__ == "__main__":
