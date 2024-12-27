@@ -2,7 +2,12 @@ from queue import Queue
 from threading import Thread
 
 import cv2
+import os
+import urllib.request
 import mediapipe as mp
+from mediapipe.tasks import python
+from mediapipe.tasks.python import vision
+from mediapipe import Image, ImageFormat
 import numpy as np
 
 import caliscope.logger
@@ -16,59 +21,68 @@ logger = caliscope.logger.get(__name__)
 
 
 class HandTracker(Tracker):
-    # Initialize MediaPipe Hands and Drawing utility
     def __init__(self) -> None:
         self.in_queue = Queue(-1)
         self.out_queue = Queue(-1)
 
-        # each port gets its own mediapipe context manager
-        # use a dictionary of queues for passing
         self.in_queues = {}
         self.out_queues = {}
         self.threads = {}
 
+        # Create tasks directory if it doesn't exist
+        self.tasks_dir = "tasks"
+        self.model_path = os.path.join(self.tasks_dir, "hand_landmarker.task")
+        if not os.path.exists(self.tasks_dir):
+            os.makedirs(self.tasks_dir)
+
+        # Download model if it doesn't exist
+        if not os.path.exists(self.model_path):
+            print("Downloading hand landmarker model...")
+            url = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task"
+            try:
+                urllib.request.urlretrieve(url, self.model_path)
+                print("Model downloaded successfully")
+            except Exception as e:
+                print(f"Error downloading model: {e}")
+                raise
+
     @property
-    def name(self):
+    def name(self) -> str:
+        """Return the name of the tracker for file naming purposes"""
         return "HAND"
 
     def run_frame_processor(self, port: int, rotation_count: int):
-        # Create a MediaPipe Hands instance
-        with mp.solutions.hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            min_detection_confidence=0.8,
-            min_tracking_confidence=0.8,
-        ) as hands:
-            while True:
-                frame = self.in_queues[port].get()
-                # apply rotation as needed
-                frame = apply_rotation(frame, rotation_count)
+        # Initialize HandLandmarker with the downloaded model
+        base_options = python.BaseOptions(model_asset_path=self.model_path)
+        options = vision.HandLandmarkerOptions(
+            base_options=base_options,
+            # running_mode=vision.RunningMode.VIDEO,
+            num_hands=1,
+            min_hand_detection_confidence=0.7,
+            min_hand_presence_confidence=0.7,
+            min_tracking_confidence=0.6,
+        )
+        detector = vision.HandLandmarker.create_from_options(options)
 
-                height, width, color = frame.shape
-                # Convert the image to RGB format
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                results = hands.process(frame)
+        while True:
+            frame = self.in_queues[port].get()
+            frame = apply_rotation(frame, rotation_count)
 
-                # initialize variables so none will be created if no points detected
-                point_ids = []
-                landmark_xy = []
+            height, width, _ = frame.shape
+            # Convert the image format for MediaPipe Tasks
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = Image(image_format=ImageFormat.SRGB, data=frame)
 
-                if results.multi_hand_landmarks:
-                    # need to track left/right...more difficult than you might think
-                    hand_types = []
-                    for item in results.multi_handedness:
-                        hand_info = item.ListFields()[0][1].pop()
-                        hand_types.append(hand_info.label)
+            results = detector.detect_for_video(mp_image, frame_timestamp_ms)
 
-                    hand_type_index = 0
+            point_ids = []
+            landmark_xy = []
 
-                    for hand_landmarks in results.multi_hand_landmarks:
-                        # create adjusting factor to distinguish left/right
-                        hand_label = hand_types[hand_type_index]
-                        if hand_label == "Left":
-                            side_adjustment_factor = 0
-                        else:
-                            side_adjustment_factor = 100
+            if results.hand_landmarks:
+                for idx, hand_landmarks in enumerate(results.hand_landmarks):
+                    # Determine if left or right hand
+                    hand_label = results.handedness[idx][0].category_name
+                    side_adjustment_factor = 0 if hand_label == "Left" else 100
 
                         for landmark_id, landmark in enumerate(hand_landmarks.landmark):
                             point_ids.append(landmark_id + side_adjustment_factor)
@@ -77,15 +91,15 @@ class HandTracker(Tracker):
                             x, y = int(landmark.x * width), int(landmark.y * height)
                             landmark_xy.append((x, y))
 
-                        hand_type_index += 1
+            
+            
+            point_ids = np.array(point_ids)
+            landmark_xy = np.array(landmark_xy)
+            landmark_xy = unrotate_points(landmark_xy, rotation_count, width, height)
 
-                point_ids = np.array(point_ids)
-                landmark_xy = np.array(landmark_xy)
-                landmark_xy = unrotate_points(landmark_xy, rotation_count, width, height)
+            point_packet = PointPacket(point_ids, landmark_xy)
 
-                point_packet = PointPacket(point_ids, landmark_xy)
-
-                self.out_queues[port].put(point_packet)
+            self.out_queues[port].put(point_packet)
 
     def get_points(self, frame: np.ndarray, port: int, rotation_count: int) -> PointPacket:
         if port not in self.in_queues.keys():
