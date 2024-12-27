@@ -29,7 +29,7 @@ class CharucoTracker(Tracker):
     def name(self):
         return "CHARUCO"
 
-    def get_points(self, frame: np.ndarray, port: int, rotation_count: int) -> PointPacket:
+    def get_points(self, frame: np.ndarray, port: int, rotation_count: int, frame_time: float | None = None) -> PointPacket:
         """Will check for charuco corners in the frame, if it doesn't find any,
         then it will look for corners in the mirror image of the frame"""
 

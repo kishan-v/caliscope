@@ -100,7 +100,7 @@ class PoseTracker(Tracker):
 
                 self.out_queues[port].put(point_packet)
 
-    def get_points(self, frame: np.ndarray, port: int, rotation_count: int) -> PointPacket:
+    def get_points(self, frame: np.ndarray, port: int, rotation_count: int, frame_time: float | None = None) -> PointPacket:
         if port not in self.in_queues.keys():
             self.in_queues[port] = Queue(1)
             self.out_queues[port] = Queue(1)

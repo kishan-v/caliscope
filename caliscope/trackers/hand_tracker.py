@@ -28,6 +28,8 @@ class HandTracker(Tracker):
         self.in_queues = {}
         self.out_queues = {}
         self.threads = {}
+        self.detectors = {}  # Store detector per port
+        self.last_timestamps = {}  # Store last timestamp per port
 
         # Create tasks directory if it doesn't exist
         self.tasks_dir = "tasks"
@@ -46,26 +48,32 @@ class HandTracker(Tracker):
                 print(f"Error downloading model: {e}")
                 raise
 
-    @property
-    def name(self) -> str:
-        """Return the name of the tracker for file naming purposes"""
-        return "HAND"
-
-    def run_frame_processor(self, port: int, rotation_count: int):
         # Initialize HandLandmarker with the downloaded model
-        base_options = python.BaseOptions(model_asset_path=self.model_path)
-        options = vision.HandLandmarkerOptions(
-            base_options=base_options,
-            # running_mode=vision.RunningMode.VIDEO,
+        self.base_options = python.BaseOptions(model_asset_path=self.model_path)
+        self.options = vision.HandLandmarkerOptions(
+            base_options=self.base_options,
+            running_mode=vision.RunningMode.VIDEO,
             num_hands=1,
             min_hand_detection_confidence=0.7,
             min_hand_presence_confidence=0.7,
             min_tracking_confidence=0.6,
         )
-        detector = vision.HandLandmarker.create_from_options(options)
+
+    @property
+    def name(self) -> str:
+        """Return the name of the tracker for file naming purposes"""
+        return "HAND"
+
+    def run_frame_processor(self, port: int, rotation_count: int) -> None:
+        # Create detector for this port if it doesn't exist
+        if port not in self.detectors:
+            self.detectors[port] = vision.HandLandmarker.create_from_options(self.options)
+            self.last_timestamps[port] = 0  # Initialize timestamp for this port
+
+        detector = self.detectors[port]
 
         while True:
-            frame = self.in_queues[port].get()
+            frame, frame_time = self.in_queues[port].get()
             frame = apply_rotation(frame, rotation_count)
 
             height, width, _ = frame.shape
@@ -73,26 +81,33 @@ class HandTracker(Tracker):
             frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
             mp_image = Image(image_format=ImageFormat.SRGB, data=frame)
 
-            results = detector.detect_for_video(mp_image, frame_timestamp_ms)
+            # Convert frame_time from seconds to milliseconds
+            timestamp_ms = int(frame_time * 1000)
+            # Ensure monotonically increasing timestamps
+            if timestamp_ms <= self.last_timestamps[port]:
+                timestamp_ms = self.last_timestamps[port] + 1
+            self.last_timestamps[port] = timestamp_ms
+
+            result = detector.detect_for_video(
+                mp_image, int(timestamp_ms)
+            )  # TODO: double check frame_time is correct format for the detector
 
             point_ids = []
             landmark_xy = []
 
-            if results.hand_landmarks:
-                for idx, hand_landmarks in enumerate(results.hand_landmarks):
+            if result.hand_landmarks:
+                for idx, hand_landmarks in enumerate(result.hand_landmarks):
                     # Determine if left or right hand
-                    hand_label = results.handedness[idx][0].category_name
+                    hand_label = result.handedness[idx][0].category_name
                     side_adjustment_factor = 0 if hand_label == "Left" else 100
 
-                        for landmark_id, landmark in enumerate(hand_landmarks.landmark):
-                            point_ids.append(landmark_id + side_adjustment_factor)
+                    for landmark_id, normalized_landmark in enumerate(hand_landmarks):
+                        point_ids.append(landmark_id + side_adjustment_factor)
 
-                            # mediapipe expresses in terms of percent of frame, so must map to pixel position
-                            x, y = int(landmark.x * width), int(landmark.y * height)
-                            landmark_xy.append((x, y))
+                        # mediapipe expresses in terms of percent of frame, so must map to pixel position
+                        x, y = int(normalized_landmark.x * width), int(normalized_landmark.y * height)
+                        landmark_xy.append((x, y))
 
-            
-            
             point_ids = np.array(point_ids)
             landmark_xy = np.array(landmark_xy)
             landmark_xy = unrotate_points(landmark_xy, rotation_count, width, height)
@@ -101,7 +116,9 @@ class HandTracker(Tracker):
 
             self.out_queues[port].put(point_packet)
 
-    def get_points(self, frame: np.ndarray, port: int, rotation_count: int) -> PointPacket:
+    def get_points(
+        self, frame: np.ndarray, port: int, rotation_count: int, frame_time: float | None = None
+    ) -> PointPacket:
         if port not in self.in_queues.keys():
             self.in_queues[port] = Queue(1)
             self.out_queues[port] = Queue(1)
@@ -113,7 +130,7 @@ class HandTracker(Tracker):
             )
             self.threads[port].start()
 
-        self.in_queues[port].put(frame)
+        self.in_queues[port].put((frame, frame_time))
         point_packet = self.out_queues[port].get()
 
         return point_packet

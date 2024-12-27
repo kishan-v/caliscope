@@ -19,7 +19,9 @@ class Tracker(ABC):
         pass
 
     @abstractmethod
-    def get_points(self, frame: np.ndarray, port: int, rotation_count: int) -> PointPacket:
+    def get_points(
+        self, frame: np.ndarray, port: int, rotation_count: int, frame_time: float | None = None
+    ) -> PointPacket:
         """
         frame: np.ndarray from reading an OpenCV capture object
 
@@ -31,6 +33,9 @@ class Tracker(ABC):
                         The function `apply_rotation` from `caliscope.trackers.helper` can correctly orient the image
                         The function `unrotate_points` from the same module can convert any tracked points back into
                         the original orientation
+
+        frame_time: float representing the time the frame was captured.
+            Used for tracker that require a frame timestamp value.
         """
         pass
 

@@ -278,7 +278,7 @@ class SimpleHolisticTracker(Tracker):
 
                 self.out_queues[port].put(point_packet)
 
-    def get_points(self, frame: np.ndarray, port: int, rotation_count: int) -> PointPacket:
+    def get_points(self, frame: np.ndarray, port: int, rotation_count: int, frame_time: float | None = None) -> PointPacket:
         """
         This is the primary method exposed to the rest of the code.
         The tracker receives frames and basic camera data from the Stream,
