@@ -227,18 +227,26 @@ class Configurator:
         self.update_config_toml()
 
     def save_camera(self, camera: Camera | CameraData):
-        def none_or_list(value):
+        def none_or_list(value: np.ndarray | None):
             # required to make sensible numeric format
             # otherwise toml formats as text
-            if value is None or value == "null":
+            if value is None:
                 return None
-            else:
+            if isinstance(value, str) and value == "null":
+                return None
+            # Handle numpy array
+            if isinstance(value, np.ndarray):
                 return value.tolist()
+            return value
 
-        if camera.rotation is not None and camera.rotation != "null":
-            # store rotation as 3 parameter rodrigues
-            rotation_for_config = cv2.Rodrigues(camera.rotation)[0][:, 0]
-            rotation_for_config = rotation_for_config.tolist()
+        if camera.rotation is not None and not isinstance(camera.rotation, str):
+            # Check if rotation is a numpy array with values
+            if isinstance(camera.rotation, np.ndarray) and camera.rotation.size > 0:
+                # store rotation as 3 parameter rodrigues
+                rotation_for_config = cv2.Rodrigues(camera.rotation)[0][:, 0]
+                rotation_for_config = rotation_for_config.tolist()
+            else:
+                rotation_for_config = None
         else:
             rotation_for_config = None
 
